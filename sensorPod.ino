@@ -2,7 +2,16 @@
 
 This sketch connects the arduino to a raspberry pi
 (set up as an access point with IP Address 192.168.42.1)
-and sends it the readings for
+and sends it the readings for temperature and turbidity
+every 1 second.
+
+If the arduino can't connect to the pi, it writes the
+temperature and turbidity to a text file on the SD card
+(if one is connected to the wifi shield)
+
+You will need:
+- WINC1500 wifi shield
+- Micro SD card (optional)
 
 ***************************************/
 
@@ -45,6 +54,7 @@ ThreadController tController = ThreadController();
 void writeDataToSD();
 
 WiFiUDP Udp;
+IPAddress piAddress = IPAddress(192, 168, 42, 1);
 
 void setup() {
    //Initialize serial and wait for port to open:
@@ -120,7 +130,7 @@ void connectToPi() {
 }
 
 void sendDataToPi() {
-   Udp.beginPacket(IPAddress(192, 168, 42, 1), localPort);
+   Udp.beginPacket(piAddress, localPort);
 
    char t[] = "Turbidity: ";
    Udp.write(t);
