@@ -1,5 +1,7 @@
 /**************************************
 
+Sensor Pod -- Written by Benjamin Budai in 2019
+
 This sketch connects the arduino to a raspberry pi
 (set up as an access point with IP Address 192.168.42.1)
 and sends it the readings for temperature and turbidity
@@ -12,6 +14,24 @@ temperature and turbidity to a text file on the SD card
 You will need:
 - WINC1500 wifi shield
 - Micro SD card (optional)
+- SEN0189 Turbidity Sensor (from DFRobot)
+- Waterproof DS18B20 Digital temperature sensor (also DFRobot)
+- a grove connection shield could be helpful for keeping connections clean
+
+Connections:
+1. Attach the wifi shield
+2. Attach the power and ground wires from all sensors to the arduino
+3. Attach the data wire from the temperature sensor to pin 2 (you can change this -- just change DS18S20_Pin appropriately)
+4. Attach the data wire from the turbidity sensor to Analogue pin 12 (You can change this as well, just change turbidityPin)
+
+Other setup:
+You will need to configure the sketch to work with your raspberry pi, so make sure
+to make the following updates:
+- Change SECRET_PASS and SECRET_SSID in "arduino_secrets.h" to be the password and SSID
+   for accessing the raspberry pi (set up as an access point)
+- Make sure that "localPort" is the port you want to use (it has to be the same as the port
+   that the raspberry pi will be listening on)
+- Change "piAddress" to reflect the IP address of your raspberry pi.
 
 ***************************************/
 
@@ -34,7 +54,7 @@ char pass[] = SECRET_PASS;    // Password for the pi - gotten from "arduino_secr
 float round_to_dp( float in_value, int decimal_place );
 
 double getTurbidity();
-int tubidityPin = A12;
+int turbidityPin = A12;
 
 void printWiFiStatus();
 void connectToPi();
@@ -96,7 +116,7 @@ double getTurbidity() {
    double volt = 0;
    double ntu = 3000;
    for(int i=0; i<800; i++) {
-      volt += ((float)analogRead(tubidityPin)/1023)*5;
+      volt += ((float)analogRead(turbidityPin)/1023)*5;
    }
    volt = volt/800;
    volt = round_to_dp(volt,1);
