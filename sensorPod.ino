@@ -16,6 +16,7 @@ You will need:
 - Micro SD card (optional)
 - SEN0189 Turbidity Sensor (from DFRobot)
 - Waterproof DS18B20 Digital temperature sensor (also DFRobot)
+- a means by which to power the arduino and sensors
 - a grove connection shield could be helpful for keeping connections clean
 
 Connections:
@@ -76,6 +77,8 @@ void writeDataToSD();
 WiFiUDP Udp;
 IPAddress piAddress = IPAddress(192, 168, 42, 1);
 
+bool isInShellMode = false;
+
 void setup() {
    //Initialize serial and wait for port to open:
    Serial.begin(9600);
@@ -104,10 +107,11 @@ void loop() {
       connectToPi();
    }
    else {
-      sendDataToPi();
+      if (!isInShellMode) {
+         sendDataToPi();
+      }
+      checkForUdpData();
    }
-
-   checkForUdpData();
 
    delay(1000);
 }
@@ -181,8 +185,45 @@ void checkForUdpData() {
       // read the packet into packetBufffer
       int len = Udp.read(packetBuffer, 255);
       if (len > 0) packetBuffer[len] = 0;
+      char data[len];
+      for (int i = 0; i < len; i++) {
+         data[i] = packetBuffer[i];
+      }
       Serial.println("Contents:");
-      Serial.println(packetBuffer);
+      Serial.println(data);
+      char clear[] = "sdclear";
+      char read[] = "sdread";
+      char sense[] = "sense";
+      char shellMode[] = "shellmode";
+      if(strstr(packetBuffer, shellMode)) {
+         Serial.println("Entering Shell Mode!");
+         isInShellMode = true;
+      }
+      else if(strstr(packetBuffer, clear)) {
+         Udp.beginPacket(piAddress, localPort);
+         char b[] = "Didn't write -- sorry not sorry #";
+         Udp.write(b);
+         Udp.endPacket();
+         delay(100);
+      }
+      else if(strstr(packetBuffer, read)) {
+         Udp.beginPacket(piAddress, localPort);
+         char b[] = "Didn't read -- sorry not sorry #";
+         Udp.write(b);
+         Udp.endPacket();
+         delay(100);
+      }
+      else if(strstr(packetBuffer, sense)) {
+         sendDataToPi();
+         delay(100);
+      }
+      else {
+         Udp.beginPacket(piAddress, localPort);
+         char b[] = "Unrecognized command";
+         Udp.write(b);
+         Udp.endPacket();
+         delay(100);
+      }
    }
 }
 
