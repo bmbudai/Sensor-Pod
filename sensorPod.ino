@@ -220,7 +220,7 @@ void checkForUdpData() {
             Udp.endPacket();
          }
          else {
-            char b[] = "Didn't clear it -- sorry not sorry #";
+            char b[] = "Didn't clear it -- data.txt not found";
             Udp.write(b);
             Udp.endPacket();
          }
@@ -232,7 +232,7 @@ void checkForUdpData() {
             File dataFile = SD.open("data.txt", FILE_READ);
             char buff[73];
             while(dataFile.available()) {
-               dataFile.readString().toCharArray(buff, 73);
+               dataFile.readStringUntil('\n').toCharArray(buff, 73, 0);
                Udp.write(buff);
                Serial.print(buff);
                Udp.endPacket();
@@ -243,8 +243,13 @@ void checkForUdpData() {
             Udp.endPacket();
          }
          else {
-            char b[] = "Didn't read -- sorry not sorry #";
-            Udp.write(b);
+            // char b[] = "Didn't read -- data.txt not found";
+            // Udp.write(b);
+            // Udp.endPacket();
+            //
+            // Udp.beginPacket(piAddress, localPort);
+            char end[] = "EOF";
+            Udp.write(end);
             Udp.endPacket();
          }
          // Udp.flush();
@@ -264,7 +269,7 @@ void checkForUdpData() {
 }
 
 void writeDataToSD() {
-   Serial.println("Write to SD card... ");
+   Serial.println("Attempting to write to SD card... ");
 
    File dataFile = SD.open("data.txt", FILE_WRITE);
    if (dataFile) {
@@ -274,6 +279,7 @@ void writeDataToSD() {
       dataFile.print(getTurbidity());
       dataFile.print("\n");
       dataFile.close();
+      Serial.println("Done.");
    }
    else {
       Serial.println("Error opening the file.");
