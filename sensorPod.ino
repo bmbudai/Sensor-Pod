@@ -184,6 +184,7 @@ void checkForUdpData() {
 
       // read the packet into packetBufffer
       int len = Udp.read(packetBuffer, 255);
+      Udp.flush();
       if (len > 0) packetBuffer[len] = 0;
       char data[len];
       for (int i = 0; i < len; i++) {
@@ -194,35 +195,70 @@ void checkForUdpData() {
       char clear[] = "sdclear";
       char read[] = "sdread";
       char sense[] = "sense";
+      char quit[] = "quit";
       char shellMode[] = "shellmode";
       if(strstr(packetBuffer, shellMode)) {
          Serial.println("Entering Shell Mode!");
          isInShellMode = true;
       }
-      else if(strstr(packetBuffer, clear)) {
+      else if(strstr(packetBuffer, quit)) {
          Udp.beginPacket(piAddress, localPort);
-         char b[] = "Didn't write -- sorry not sorry #";
+         char b[] = "Exiting shell mode";
          Udp.write(b);
          Udp.endPacket();
-         delay(100);
+         Udp.flush();
+         isInShellMode = false;
+      }
+      else if(strstr(packetBuffer, clear)) {
+         Udp.beginPacket(piAddress, localPort);
+         if (SD.exists("data.txt")) {
+            Serial.println("Removed data.txt");
+            SD.remove("data.txt");
+            Udp.beginPacket(piAddress, localPort);
+            char removed[] = "Removed data.txt";
+            Udp.write(removed);
+            Udp.endPacket();
+         }
+         else {
+            char b[] = "Didn't clear it -- sorry not sorry #";
+            Udp.write(b);
+            Udp.endPacket();
+         }
       }
       else if(strstr(packetBuffer, read)) {
          Udp.beginPacket(piAddress, localPort);
-         char b[] = "Didn't read -- sorry not sorry #";
-         Udp.write(b);
-         Udp.endPacket();
-         delay(100);
+         if (SD.exists("data.txt")) {
+            Serial.println("Found data.txt");
+            File dataFile = SD.open("data.txt", FILE_READ);
+            char buff[73];
+            while(dataFile.available()) {
+               dataFile.readString().toCharArray(buff, 73);
+               Udp.write(buff);
+               Serial.print(buff);
+               Udp.endPacket();
+               Udp.beginPacket(piAddress, localPort);
+            }
+            char end[] = "EOF";
+            Udp.write(end);
+            Udp.endPacket();
+         }
+         else {
+            char b[] = "Didn't read -- sorry not sorry #";
+            Udp.write(b);
+            Udp.endPacket();
+         }
+         // Udp.flush();
       }
       else if(strstr(packetBuffer, sense)) {
          sendDataToPi();
-         delay(100);
+         Udp.flush();
       }
       else {
          Udp.beginPacket(piAddress, localPort);
          char b[] = "Unrecognized command";
          Udp.write(b);
          Udp.endPacket();
-         delay(100);
+         Udp.flush();
       }
    }
 }
