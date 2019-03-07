@@ -10,6 +10,7 @@
 import socket
 import os
 import sys
+import atexit
 
 UDP_IP_ADDRESS = '192.168.42.1' #The IP address of this pi
 
@@ -52,11 +53,10 @@ def printHelp():
 	print("\nclear -- clear the screen")
 	print("\nquit -- Close this shell\n\n")
 
-def quit():
+def exit():
 	serverSock.sendto("quit", addr)
 	response = getResponse()
 	print(response)
-	sys.exit(0)
 
 def sdread():
 	serverSock.sendto("sdread", addr)
@@ -113,6 +113,10 @@ def getFile():
 			print "Wrote the data to {}.".format(filename)
 		else:
 			print("\033[1;31mThere was nothing to be read.\033[0;0m")
-	
+
+def exit_handler():
+	exit()
+atexit.register(exit_handler)
+
 printHelp()
 takeOrders()
