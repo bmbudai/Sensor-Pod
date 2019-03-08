@@ -107,13 +107,15 @@ void loop() {
       connectToPi();
    }
    else {
-      if (!isInShellMode) {
+      while (!isInShellMode) {
          sendDataToPi();
+         checkForUdpData();
+         delay(1000);
       }
-      checkForUdpData();
+      while (isInShellMode) {
+         checkForUdpData();
+      }
    }
-
-   delay(1000);
 }
 
 double getTurbidity() {
@@ -184,7 +186,7 @@ void checkForUdpData() {
 
       // read the packet into packetBufffer
       int len = Udp.read(packetBuffer, 255);
-      Udp.flush();
+      // Udp.flush();
       if (len > 0) packetBuffer[len] = 0;
       char data[len];
       for (int i = 0; i < len; i++) {
@@ -206,7 +208,7 @@ void checkForUdpData() {
          char b[] = "Exiting shell mode";
          Udp.write(b);
          Udp.endPacket();
-         Udp.flush();
+         // Udp.flush();
          isInShellMode = false;
       }
       else if(strstr(packetBuffer, clear)) {
@@ -256,14 +258,14 @@ void checkForUdpData() {
       }
       else if(strstr(packetBuffer, sense)) {
          sendDataToPi();
-         Udp.flush();
+         // Udp.flush();
       }
       else {
          Udp.beginPacket(piAddress, localPort);
          char b[] = "Unrecognized command";
          Udp.write(b);
          Udp.endPacket();
-         Udp.flush();
+         // Udp.flush();
       }
    }
 }
