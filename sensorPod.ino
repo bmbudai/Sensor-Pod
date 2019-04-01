@@ -23,9 +23,9 @@ Other setup:
 You will need to configure the sketch to work with your raspberry pi, so make sure
 to make the following updates:
 - Change SECRET_PASS and SECRET_SSID in "arduino_secrets.h" to be the password and SSID
-   for accessing the raspberry pi (set up as an access point)
+for accessing the raspberry pi (set up as an access point)
 - Make sure that "localPort" is the port you want to use (it has to be the same as the port
-   that the raspberry pi will be listening on)
+that the raspberry pi will be listening on)
 - Change "piAddress" to reflect the IP address of your raspberry pi.
 ***************************************/
 
@@ -33,6 +33,7 @@ to make the following updates:
 #include <SPI.h>
 #include <WiFi101.h>
 #include <WiFiUdp.h>
+#include <PubSubClient.h>
 #include <Wire.h>
 #include <OneWire.h>
 #include <SD.h>
@@ -71,6 +72,11 @@ void writeDataToSD();
 
 WiFiUDP Udp;
 IPAddress piAddress = IPAddress(192, 168, 42, 1);
+IPAddress server(192, 168, 42, 1);
+WiFiClient wifiClient;
+PubSubClient client(wifiClient);
+void reconnect();
+void callback(char* topic, byte* payload, unsigned int length);
 
 bool isInShellMode = false;
 
@@ -84,6 +90,8 @@ void setup() {
       // don't continue:
       while (true);
    }
+   client.setServer(server, 1883);
+   client.setCallback(callback);
 
    if (!SD.begin(4)) {
       Serial.println("SD couldn't be initialized!");
@@ -97,20 +105,26 @@ void setup() {
 }
 
 void loop() {
+
    if (WiFi.status() != WL_CONNECTED) {
       status = WL_DISCONNECTED;
       connectToPi();
    }
    else {
+      if (!client.connected()) {
+         reconnect();
+      }
       while (!isInShellMode) {
          sendDataToPi();
-         checkForUdpData();
+         client.loop();
+         // checkForUdpData();
          // LowPower.idle(SLEEP_1S, ADC_OFF, TIMER5_OFF, TIMER4_OFF, TIMER3_OFF,
          // TIMER2_OFF, TIMER1_OFF, TIMER0_OFF, SPI_OFF, USART3_OFF,
          // USART2_OFF, USART1_OFF, USART0_OFF, TWI_OFF);
-         power_all_disable();
-         LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
-         power_all_enable();
+         delay(1000);
+         // power_all_disable();
+         // LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
+         // power_all_enable();
       }
       while (isInShellMode) {
          checkForUdpData();
@@ -127,10 +141,10 @@ double getTurbidity() {
    volt = volt/800;
    volt = round_to_dp(volt,1);
    if(volt < 2.5) {
-     ntu = 3000;
+      ntu = 3000;
    }
    else {
-     ntu = -1120.4*square(volt)+5742.3*volt-4353.8;
+      ntu = -1120.4*square(volt)+5742.3*volt-4353.8;
    }
    return ntu;
 }
@@ -138,7 +152,7 @@ double getTurbidity() {
 void connectToPi() {
    // attempt to connect to WiFi network:
    while ( status != WL_CONNECTED) {
-       // Make sure that since we can't send data to the pi,
+      // Make sure that since we can't send data to the pi,
       //  we will write it to the SD card every 5 seconds:
       tController.run();
 
@@ -156,20 +170,27 @@ void connectToPi() {
 }
 
 void sendDataToPi() {
-   Udp.beginPacket(piAddress, localPort);
+   Serial.println("Attempting to send data to the pi");
+   // Udp.beginPacket(piAddress, localPort);
 
    char t[] = "Turbidity: ";
-   Udp.write(t);
+   // Udp.write(t);
    char b[10];
    String(getTurbidity()).toCharArray(b, 10);
-   Udp.write(b);
+   // Udp.write(b);
+
+   client.publish("outTopic", t);
+   client.publish("outTopic", b);
 
    char tempBuff[] = "     Temperature: ";
-   Udp.write(tempBuff);
+   // Udp.write(tempBuff);
    String(getTemp()).toCharArray(b, 10);
-   Udp.write(b);
+   // Udp.write(b);
+   client.publish("outTopic", tempBuff);
+   client.publish("outTopic", b);
+   // client.loop();
 
-   Udp.endPacket();
+   // Udp.endPacket();
 }
 
 void checkForUdpData() {
@@ -307,51 +328,80 @@ void printWiFiStatus() {
 
 float round_to_dp( float in_value, int decimal_place )
 {
-  float multiplier = powf( 10.0f, decimal_place );
-  in_value = roundf( in_value * multiplier ) / multiplier;
-  return in_value;
+   float multiplier = powf( 10.0f, decimal_place );
+   in_value = roundf( in_value * multiplier ) / multiplier;
+   return in_value;
 }
 
 double getTemp(){
-  byte data[12];
-  byte addr[8];
+   byte data[12];
+   byte addr[8];
 
-  if ( !ds.search(addr)) {
+   if ( !ds.search(addr)) {
       //no more sensors on chain, reset search
       ds.reset_search();
       return -1000;
-  }
+   }
 
-  if ( OneWire::crc8( addr, 7) != addr[7]) {
+   if ( OneWire::crc8( addr, 7) != addr[7]) {
       Serial.println("CRC is not valid!");
       return -1000;
-  }
+   }
 
-  if ( addr[0] != 0x10 && addr[0] != 0x28) {
+   if ( addr[0] != 0x10 && addr[0] != 0x28) {
       Serial.print("Device is not recognized");
       return -1000;
-  }
+   }
 
-  ds.reset();
-  ds.select(addr);
-  ds.write(0x44,1); // start conversion, with parasite power on at the end
+   ds.reset();
+   ds.select(addr);
+   ds.write(0x44,1); // start conversion, with parasite power on at the end
 
-  ds.reset();
-  ds.select(addr);
-  ds.write(0xBE);
+   ds.reset();
+   ds.select(addr);
+   ds.write(0xBE);
 
-  for (int i = 0; i < 9; i++) { // we need 9 bytes
-    data[i] = ds.read();
-  }
+   for (int i = 0; i < 9; i++) { // we need 9 bytes
+      data[i] = ds.read();
+   }
 
-  ds.reset_search();
+   ds.reset_search();
 
-  byte MSB = data[1];
-  byte LSB = data[0];
+   byte MSB = data[1];
+   byte LSB = data[0];
 
-  float tempRead = ((MSB << 8) | LSB); //using two's compliment
-  float TemperatureSum = tempRead / 16;
-  double FahrenheitTemp = TemperatureSum * 9 / 5 + 32;
+   float tempRead = ((MSB << 8) | LSB); //using two's compliment
+   float TemperatureSum = tempRead / 16;
+   double FahrenheitTemp = TemperatureSum * 9 / 5 + 32;
 
-  return FahrenheitTemp;
+   return FahrenheitTemp;
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+   Serial.print("Message arrived [");
+   Serial.print(topic);
+   Serial.print("] ");
+   for (unsigned int i=0;i<length;i++) {
+      Serial.print((char)payload[i]);
+   }
+   Serial.println();
+}
+
+void reconnect() {
+   // Loop until we're reconnected
+   while (!client.connected()) {
+      Serial.print("Attempting MQTT connection...");
+      // Attempt to connect
+      if (client.connect("arduinoClient")) {
+         Serial.println("connected");
+         // ... and resubscribe
+         client.subscribe("inTopic");
+      } else {
+         Serial.print("failed, rc=");
+         Serial.print(client.state());
+         Serial.println(" try again in 5 seconds");
+         // Wait 5 seconds before retrying
+         delay(5000);
+      }
+   }
 }
