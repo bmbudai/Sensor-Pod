@@ -3,7 +3,7 @@ Sensor Pod -- Written by Benjamin Budai in 2019
 This sketch connects the arduino to a raspberry pi
 (set up as an access point with IP Address 192.168.42.1)
 and sends it the readings for temperature and turbidity
-every 1 second.
+every 1 second. This is done using MQTT.
 If the arduino can't connect to the pi, it writes the
 temperature and turbidity to a text file on the SD card
 (if one is connected to the wifi shield)
@@ -32,15 +32,12 @@ that the raspberry pi will be listening on)
 
 #include <SPI.h>
 #include <WiFi101.h>
-#include <WiFiUdp.h>
 #include <PubSubClient.h>
 #include <Wire.h>
 #include <OneWire.h>
 #include <SD.h>
 #include <Thread.h>
 #include <ThreadController.h>
-#include <LowPower.h>
-#include <avr/power.h>
 #include "arduino_secrets.h" // Holds the connection info needed to connect to the pi
 
 int status = WL_IDLE_STATUS;
@@ -58,7 +55,9 @@ void connectToPi();
 unsigned int localPort = 2390;      // Port to listen on and send on
 char packetBuffer[255]; //buffer to hold incoming packet
 void sendDataToPi();
-void checkForUdpData();
+
+void sendFile();
+bool deleteFile();
 
 //Temperature chip i/o
 int DS18S20_Pin = 2;
@@ -70,7 +69,6 @@ ThreadController tController = ThreadController();
 
 void writeDataToSD();
 
-WiFiUDP Udp;
 IPAddress piAddress = IPAddress(192, 168, 42, 1);
 IPAddress server(192, 168, 42, 1);
 WiFiClient wifiClient;
@@ -106,28 +104,26 @@ void setup() {
 
 void loop() {
 
-   if (WiFi.status() != WL_CONNECTED) {
-      status = WL_DISCONNECTED;
-      connectToPi();
-   }
-   else {
+   while (!isInShellMode) {
+      if (WiFi.status() != WL_CONNECTED) {
+         status = WL_DISCONNECTED;
+         connectToPi();
+      }
       if (!client.connected()) {
          reconnect();
       }
-      while (!isInShellMode) {
-         sendDataToPi();
-         client.loop();
-         // checkForUdpData();
-         // LowPower.idle(SLEEP_1S, ADC_OFF, TIMER5_OFF, TIMER4_OFF, TIMER3_OFF,
-         // TIMER2_OFF, TIMER1_OFF, TIMER0_OFF, SPI_OFF, USART3_OFF,
-         // USART2_OFF, USART1_OFF, USART0_OFF, TWI_OFF);
-         delay(1000);
-         // power_all_disable();
-         // LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
-         // power_all_enable();
+      sendDataToPi();
+      client.loop();
+
+      delay(1000);
+   }
+   while (isInShellMode) {
+      if (WiFi.status() != WL_CONNECTED) {
+         status = WL_DISCONNECTED;
+         connectToPi();
       }
-      while (isInShellMode) {
-         checkForUdpData();
+      if (!client.connected()) {
+         reconnect();
       }
    }
 }
@@ -158,137 +154,24 @@ void connectToPi() {
 
       Serial.print("Attempting to connect to SSID: ");
       Serial.println(ssid);
-      // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
       status = WiFi.begin(ssid, pass);
    }
    Serial.println("Connected to wifi");
    printWiFiStatus();
 
    Serial.println("\nStarting connection to server...");
-   // if you get a connection, report back via serial:
-   Udp.begin(localPort);
 }
 
 void sendDataToPi() {
-   Serial.println("Attempting to send data to the pi");
-   // Udp.beginPacket(piAddress, localPort);
-
-   char t[] = "Turbidity: ";
-   // Udp.write(t);
    char b[10];
    String(getTurbidity()).toCharArray(b, 10);
-   // Udp.write(b);
 
-   client.publish("outTopic", t);
-   client.publish("outTopic", b);
+   client.publish("dataToPi", b);
 
-   char tempBuff[] = "     Temperature: ";
-   // Udp.write(tempBuff);
+   char tempBuff[] = ",";
    String(getTemp()).toCharArray(b, 10);
-   // Udp.write(b);
-   client.publish("outTopic", tempBuff);
-   client.publish("outTopic", b);
-   // client.loop();
-
-   // Udp.endPacket();
-}
-
-void checkForUdpData() {
-   // if there's data available, read a packet
-   int packetSize = Udp.parsePacket();
-   if (packetSize) {
-      Serial.print("Received packet of size ");
-      Serial.println(packetSize);
-      Serial.print("From ");
-      IPAddress remoteIp = Udp.remoteIP();
-      Serial.print(remoteIp);
-      Serial.print(", port ");
-      Serial.println(Udp.remotePort());
-
-      // read the packet into packetBufffer
-      int len = Udp.read(packetBuffer, 255);
-      // Udp.flush();
-      if (len > 0) packetBuffer[len] = 0;
-      char data[len];
-      for (int i = 0; i < len; i++) {
-         data[i] = packetBuffer[i];
-      }
-      Serial.println("Contents:");
-      Serial.println(data);
-      char clear[] = "sdclear";
-      char read[] = "sdread";
-      char sense[] = "sense";
-      char quit[] = "quit";
-      char shellMode[] = "shellmode";
-      if(strstr(packetBuffer, shellMode)) {
-         Serial.println("Entering Shell Mode!");
-         isInShellMode = true;
-      }
-      else if(strstr(packetBuffer, quit)) {
-         Udp.beginPacket(piAddress, localPort);
-         char b[] = "Exiting shell mode";
-         Udp.write(b);
-         Udp.endPacket();
-         // Udp.flush();
-         isInShellMode = false;
-      }
-      else if(strstr(packetBuffer, clear)) {
-         Udp.beginPacket(piAddress, localPort);
-         if (SD.exists("data.txt")) {
-            Serial.println("Removed data.txt");
-            SD.remove("data.txt");
-            Udp.beginPacket(piAddress, localPort);
-            char removed[] = "Removed data.txt";
-            Udp.write(removed);
-            Udp.endPacket();
-         }
-         else {
-            char b[] = "Didn't clear it -- data.txt not found";
-            Udp.write(b);
-            Udp.endPacket();
-         }
-      }
-      else if(strstr(packetBuffer, read)) {
-         Udp.beginPacket(piAddress, localPort);
-         if (SD.exists("data.txt")) {
-            Serial.println("Found data.txt");
-            File dataFile = SD.open("data.txt", FILE_READ);
-            char buff[73];
-            while(dataFile.available()) {
-               dataFile.readStringUntil('\n').toCharArray(buff, 73, 0);
-               Udp.write(buff);
-               Serial.print(buff);
-               Udp.endPacket();
-               Udp.beginPacket(piAddress, localPort);
-            }
-            char end[] = "EOF";
-            Udp.write(end);
-            Udp.endPacket();
-         }
-         else {
-            // char b[] = "Didn't read -- data.txt not found";
-            // Udp.write(b);
-            // Udp.endPacket();
-            //
-            // Udp.beginPacket(piAddress, localPort);
-            char end[] = "EOF";
-            Udp.write(end);
-            Udp.endPacket();
-         }
-         // Udp.flush();
-      }
-      else if(strstr(packetBuffer, sense)) {
-         sendDataToPi();
-         // Udp.flush();
-      }
-      else {
-         Udp.beginPacket(piAddress, localPort);
-         char b[] = "Unrecognized command";
-         Udp.write(b);
-         Udp.endPacket();
-         // Udp.flush();
-      }
-   }
+   client.publish("dataToPi", tempBuff);
+   client.publish("dataToPi", b);
 }
 
 void writeDataToSD() {
@@ -296,12 +179,13 @@ void writeDataToSD() {
 
    File dataFile = SD.open("data.txt", FILE_WRITE);
    if (dataFile) {
-      dataFile.print("Temperature: ");
-      dataFile.print(getTemp());
-      dataFile.print(", Turbidity: ");
       dataFile.print(getTurbidity());
+      dataFile.print(",");
+      dataFile.print(getTemp());
       dataFile.print("\n");
+
       dataFile.close();
+
       Serial.println("Done.");
    }
    else {
@@ -381,10 +265,57 @@ void callback(char* topic, byte* payload, unsigned int length) {
    Serial.print("Message arrived [");
    Serial.print(topic);
    Serial.print("] ");
+
+   char message[length];
    for (unsigned int i=0;i<length;i++) {
       Serial.print((char)payload[i]);
+      message[i] = (char)payload[i];
    }
    Serial.println();
+
+   if (strstr(message, "Read SD File")) {
+      Serial.println("Sending file contents...");
+      sendFile();
+   }
+   else if (strstr(message, "Delete SD File")) {
+      Serial.println("Delete");
+      if (deleteFile()) {
+         client.publish("messageForPi", "Deleted the data file.");
+      }
+      else {
+         client.publish("messageForPi", "File couldn't be deleted.");
+      }
+   }
+   else {
+      Serial.println("Unrecognized message.");
+   }
+}
+
+void sendFile() {
+   if (SD.exists("data.txt")) {
+      Serial.println("Found data.txt");
+      File dataFile = SD.open("data.txt", FILE_READ);
+      char buff[73];
+      while(dataFile.available()) {
+         dataFile.readStringUntil('\n').toCharArray(buff, 73, 0);
+         client.publish("fileToPi", buff);
+      }
+   }
+   else {
+      client.publish("messageForPi", "Data file not found!");
+      Serial.println("Data file not found!");
+   }
+}
+
+bool deleteFile() {
+   if (SD.exists("data.txt")) {
+      Serial.println("Removed data.txt");
+      SD.remove("data.txt");
+      return true;
+   }
+   else {
+      return false;
+   }
 }
 
 void reconnect() {
@@ -396,6 +327,7 @@ void reconnect() {
          Serial.println("connected");
          // ... and resubscribe
          client.subscribe("inTopic");
+         client.subscribe("fileTransfer");
       } else {
          Serial.print("failed, rc=");
          Serial.print(client.state());
