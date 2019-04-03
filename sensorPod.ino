@@ -1,12 +1,17 @@
 /**************************************
+
 Sensor Pod -- Written by Benjamin Budai in 2019
+
 This sketch connects the arduino to a raspberry pi
 (set up as an access point with IP Address 192.168.42.1)
-and sends it the readings for temperature and turbidity
+and publishes the readings for temperature and turbidity
 every 1 second. This is done using MQTT.
 If the arduino can't connect to the pi, it writes the
 temperature and turbidity to a text file on the SD card
-(if one is connected to the wifi shield)
+(if one is connected to the wifi shield) every 5-ish seconds
+until it can reconnect. It's not exactly 5 because the
+process of trying to reconnect uses some time.
+
 You will need:
 - WINC1500 wifi shield
 - Micro SD card (optional)
@@ -14,19 +19,21 @@ You will need:
 - Waterproof DS18B20 Digital temperature sensor (also DFRobot)
 - a means by which to power the arduino and sensors
 - a grove connection shield could be helpful for keeping connections clean
+
 Connections:
 1. Attach the wifi shield
 2. Attach the power and ground wires from all sensors to the arduino
 3. Attach the data wire from the temperature sensor to pin 2 (you can change this -- just change DS18S20_Pin appropriately)
 4. Attach the data wire from the turbidity sensor to Analogue pin 12 (You can change this as well, just change turbidityPin)
+
 Other setup:
 You will need to configure the sketch to work with your raspberry pi, so make sure
 to make the following updates:
 - Change SECRET_PASS and SECRET_SSID in "arduino_secrets.h" to be the password and SSID
 for accessing the raspberry pi (set up as an access point)
-- Make sure that "localPort" is the port you want to use (it has to be the same as the port
-that the raspberry pi will be listening on)
+- Make sure that
 - Change "piAddress" to reflect the IP address of your raspberry pi.
+
 ***************************************/
 
 
@@ -52,8 +59,6 @@ int turbidityPin = A12;
 
 void printWiFiStatus();
 void connectToPi();
-unsigned int localPort = 2390;      // Port to listen on and send on
-char packetBuffer[255]; //buffer to hold incoming packet
 void sendDataToPi();
 
 void sendFile();
@@ -76,7 +81,6 @@ PubSubClient client(wifiClient);
 void reconnect();
 void callback(char* topic, byte* payload, unsigned int length);
 
-bool isInShellMode = false;
 
 void setup() {
    //Initialize serial and wait for port to open:
@@ -103,29 +107,17 @@ void setup() {
 }
 
 void loop() {
-
-   while (!isInShellMode) {
-      if (WiFi.status() != WL_CONNECTED) {
-         status = WL_DISCONNECTED;
-         connectToPi();
-      }
-      if (!client.connected()) {
-         reconnect();
-      }
-      sendDataToPi();
-      client.loop();
-
-      delay(1000);
+   if (WiFi.status() != WL_CONNECTED) {
+      status = WL_DISCONNECTED;
+      connectToPi();
    }
-   while (isInShellMode) {
-      if (WiFi.status() != WL_CONNECTED) {
-         status = WL_DISCONNECTED;
-         connectToPi();
-      }
-      if (!client.connected()) {
-         reconnect();
-      }
+   if (!client.connected()) {
+      reconnect();
    }
+   sendDataToPi();
+   client.loop();
+
+   delay(1000);
 }
 
 double getTurbidity() {
@@ -149,7 +141,7 @@ void connectToPi() {
    // attempt to connect to WiFi network:
    while ( status != WL_CONNECTED) {
       // Make sure that since we can't send data to the pi,
-      //  we will write it to the SD card every 5 seconds:
+      // we will write it to the SD card every 5 seconds:
       tController.run();
 
       Serial.print("Attempting to connect to SSID: ");
@@ -168,9 +160,9 @@ void sendDataToPi() {
 
    client.publish("dataToPi", b);
 
-   char tempBuff[] = ",";
+   char comma[] = ",";
    String(getTemp()).toCharArray(b, 10);
-   client.publish("dataToPi", tempBuff);
+   client.publish("dataToPi", comma);
    client.publish("dataToPi", b);
 }
 
