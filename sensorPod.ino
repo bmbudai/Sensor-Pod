@@ -45,7 +45,52 @@ for accessing the raspberry pi (set up as an access point)
 #include <SD.h>
 #include <Thread.h>
 #include <ThreadController.h>
+#include <avr/pgmspace.h>
+#include <EEPROM.h>
 #include "arduino_secrets.h" // Holds the connection info needed to connect to the pi
+
+
+//dissolved oxygen sensor analog output pin to arduino mainboard
+#define DoSensorPin A14
+//For arduino uno, the ADC reference is the AVCC, that is 5000mV(TYP)
+#define VREF 5000
+
+float doValue; //Current dissolved oxygen value, unit: mg/L
+float temperature = 25; //The default temp is 25 Celsius
+
+#define ReceivedBufferLength 20
+char receivedBuffer[ReceivedBufferLength+1];    // store the serial command
+byte receivedBufferIndex = 0;
+
+// sum of sample point
+#define SCOUNT 30
+int analogBuffer[SCOUNT];    //store the analog value in the array, readed from ADC
+int analogBufferTemp[SCOUNT];
+int analogBufferIndex = 0,copyIndex = 0;
+
+const float SaturationValueTab[41] PROGMEM = {      //saturation dissolved oxygen concentrations at various temperatures
+   14.46, 14.22, 13.82, 13.44, 13.09,
+   12.74, 12.42, 12.11, 11.81, 11.53,
+   11.26, 11.01, 10.77, 10.53, 10.30,
+   10.08, 9.86,  9.66,  9.46,  9.27,
+   9.08,  8.90,  8.73,  8.57,  8.41,
+   8.25,  8.11,  7.96,  7.82,  7.69,
+   7.56,  7.43,  7.30,  7.18,  7.07,
+   6.95,  6.84,  6.73,  6.63,  6.53,
+   6.41,
+};
+
+//the address of the Saturation Oxygen voltage stored in the EEPROM
+#define SaturationDoVoltageAddress 12
+//the address of the Saturation Oxygen temperature stored in the EEPROM
+#define SaturationDoTemperatureAddress 16
+
+float SaturationDoVoltage,SaturationDoTemperature;
+float averageVoltage;
+
+#define EEPROM_write(address, p) {int i = 0; byte *pp = (byte*)&(p);for(; i < sizeof(p); i++) EEPROM.write(address+i, pp[i]);}
+#define EEPROM_read(address, p)  {int i = 0; byte *pp = (byte*)&(p);for(; i < sizeof(p); i++) pp[i]=EEPROM.read(address+i);}
+
 
 int status = WL_IDLE_STATUS;
 
@@ -86,6 +131,8 @@ void setup() {
    //Initialize serial and wait for port to open:
    Serial.begin(9600);
 
+   pinMode(DoSensorPin,INPUT);
+
    // check for the presence of the shield:
    if (WiFi.status() == WL_NO_SHIELD) {
       Serial.println("WiFi shield not present");
@@ -104,9 +151,11 @@ void setup() {
    tController.add(&writeData);
 
    connectToPi();
+   readDoCharacteristicValues();      //read Characteristic Values calibrated from the EEPROM
 }
 
 void loop() {
+   printDoValue();
    if (WiFi.status() != WL_CONNECTED) {
       status = WL_DISCONNECTED;
       connectToPi();
@@ -118,6 +167,30 @@ void loop() {
    client.loop();
 
    delay(1000);
+}
+
+void printDoValue() {
+   updateDoValue();
+   Serial.print(F("DO Value:"));
+   Serial.print(doValue,2);
+   Serial.println(F("mg/L"));
+}
+
+void updateDoValue() {
+      analogBuffer[analogBufferIndex] = analogRead(DoSensorPin);    //read the analog value and store into the buffer
+      analogBufferIndex++;
+      if(analogBufferIndex == SCOUNT)
+      analogBufferIndex = 0;
+
+      for(copyIndex=0;copyIndex<SCOUNT;copyIndex++)
+      {
+         analogBufferTemp[copyIndex]= analogBuffer[copyIndex];
+      }
+      // read the value more stable by the median filtering algorithm
+      averageVoltage = getMedianNum(analogBufferTemp,SCOUNT) * (float)VREF / 1024.0;
+
+      //calculate the do value, doValue = Voltage / SaturationDoVoltage * SaturationDoValue(with temperature compensation)
+      doValue = pgm_read_float_near( &SaturationValueTab[0] + (int)(SaturationDoTemperature+0.5) ) * averageVoltage / SaturationDoVoltage;
 }
 
 double getTurbidity() {
@@ -148,6 +221,7 @@ void connectToPi() {
       Serial.println(ssid);
       status = WiFi.begin(ssid, pass);
    }
+
    Serial.println("Connected to wifi");
    printWiFiStatus();
 
@@ -155,15 +229,20 @@ void connectToPi() {
 }
 
 void sendDataToPi() {
-   char b[10];
-   String(getTurbidity()).toCharArray(b, 10);
+   char payload[20];
+   String(getTurbidity()).toCharArray(payload, 20);
+   strcat(payload, ", ");
 
-   client.publish("dataToPi", b);
+   char temp[6];
+   String(getTemp()).toCharArray(temp, 6);
+   strcat(payload, temp);
 
-   char comma[] = ",";
-   String(getTemp()).toCharArray(b, 10);
-   client.publish("dataToPi", comma);
-   client.publish("dataToPi", b);
+   strcat(payload, ", ");
+   updateDoValue();
+   String(doValue).toCharArray(temp, 6);
+   strcat(payload, temp);
+
+   client.publish("dataToPi", payload);
 }
 
 void writeDataToSD() {
@@ -171,10 +250,20 @@ void writeDataToSD() {
 
    File dataFile = SD.open("data.txt", FILE_WRITE);
    if (dataFile) {
-      dataFile.print(getTurbidity());
-      dataFile.print(",");
-      dataFile.print(getTemp());
-      dataFile.print("\n");
+      char payload[20];
+      String(getTurbidity()).toCharArray(payload, 20);
+      strcat(payload, ", ");
+
+      char temp[6];
+      String(getTemp()).toCharArray(temp, 6);
+      strcat(payload, temp);
+
+      strcat(payload, ", ");
+      updateDoValue();
+      String(doValue).toCharArray(temp, 6);
+      strcat(payload, temp);
+
+      dataFile.print(payload);
 
       dataFile.close();
 
@@ -278,6 +367,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
          client.publish("messageForPi", "File couldn't be deleted.");
       }
    }
+   else if (strstr(message, "calibrate")) {
+      calibrateDO();
+   }
    else {
       Serial.println("Unrecognized message.");
    }
@@ -311,6 +403,7 @@ bool deleteFile() {
 }
 
 void reconnect() {
+   Serial.println("reconnect");
    // Loop until we're reconnected
    while (!client.connected()) {
       Serial.print("Attempting MQTT connection...");
@@ -320,6 +413,7 @@ void reconnect() {
          // ... and resubscribe
          client.subscribe("inTopic");
          client.subscribe("fileTransfer");
+         client.subscribe("calibration");
       } else {
          Serial.print("failed, rc=");
          Serial.print(client.state());
@@ -327,5 +421,123 @@ void reconnect() {
          // Wait 5 seconds before retrying
          delay(5000);
       }
+   }
+}
+
+
+
+byte uartParse()
+{
+   byte modeIndex = 0;
+   if(strstr(receivedBuffer, "CALIBRATION") != NULL)
+   modeIndex = 1;
+   else if(strstr(receivedBuffer, "EXIT") != NULL)
+   modeIndex = 3;
+   else if(strstr(receivedBuffer, "SATCAL") != NULL)
+   modeIndex = 2;
+   return modeIndex;
+}
+
+void calibrateDO() {
+   EEPROM_write(SaturationDoVoltageAddress, averageVoltage);
+   EEPROM_write(SaturationDoTemperatureAddress, temperature);
+   SaturationDoVoltage = averageVoltage;
+   SaturationDoTemperature = temperature;
+   client.publish("calibrationMessage", "Calibration complete.");
+}
+
+void doCalibration(byte mode)
+{
+   char *receivedBufferPtr;
+   static boolean doCalibrationFinishFlag = 0,enterCalibrationFlag = 0;
+   float voltageValueStore;
+   switch(mode)
+   {
+      case 0:
+      if(enterCalibrationFlag)
+      Serial.println(F("Command Error"));
+      break;
+
+      case 1:
+      enterCalibrationFlag = 1;
+      doCalibrationFinishFlag = 0;
+      Serial.println();
+      Serial.println(F(">>>Enter Calibration Mode<<<"));
+      Serial.println(F(">>>Please put the probe into the saturation oxygen water! <<<"));
+      Serial.println();
+      break;
+
+      case 2:
+      if(enterCalibrationFlag)
+      {
+         Serial.println();
+         Serial.println(F(">>>Saturation Calibration Finish!<<<"));
+         Serial.println();
+         EEPROM_write(SaturationDoVoltageAddress, averageVoltage);
+         EEPROM_write(SaturationDoTemperatureAddress, temperature);
+         SaturationDoVoltage = averageVoltage;
+         SaturationDoTemperature = temperature;
+         doCalibrationFinishFlag = 1;
+      }
+      break;
+
+      case 3:
+      if(enterCalibrationFlag)
+      {
+         Serial.println();
+         if(doCalibrationFinishFlag)
+         Serial.print(F(">>>Calibration Successful"));
+         else
+         Serial.print(F(">>>Calibration Failed"));
+         Serial.println(F(",Exit Calibration Mode<<<"));
+         Serial.println();
+         doCalibrationFinishFlag = 0;
+         enterCalibrationFlag = 0;
+      }
+      break;
+   }
+}
+
+int getMedianNum(int bArray[], int iFilterLen)
+{
+   int bTab[iFilterLen];
+   for (byte i = 0; i<iFilterLen; i++)
+   {
+      bTab[i] = bArray[i];
+   }
+   int i, j, bTemp;
+   for (j = 0; j < iFilterLen - 1; j++)
+   {
+      for (i = 0; i < iFilterLen - j - 1; i++)
+      {
+         if (bTab[i] > bTab[i + 1])
+         {
+            bTemp = bTab[i];
+            bTab[i] = bTab[i + 1];
+            bTab[i + 1] = bTemp;
+         }
+      }
+   }
+   if ((iFilterLen & 1) > 0)
+   bTemp = bTab[(iFilterLen - 1) / 2];
+   else
+   bTemp = (bTab[iFilterLen / 2] + bTab[iFilterLen / 2 - 1]) / 2;
+   return bTemp;
+}
+
+
+void readDoCharacteristicValues(void)
+{
+   EEPROM_read(SaturationDoVoltageAddress, SaturationDoVoltage);
+   EEPROM_read(SaturationDoTemperatureAddress, SaturationDoTemperature);
+   if(EEPROM.read(SaturationDoVoltageAddress)==0xFF && EEPROM.read(SaturationDoVoltageAddress+1)==0xFF && EEPROM.read(SaturationDoVoltageAddress+2)==0xFF && EEPROM.read(SaturationDoVoltageAddress+3)==0xFF)
+   {
+      SaturationDoVoltage = 1127.6;   //default voltage:1127.6mv
+      EEPROM_write(SaturationDoVoltageAddress, SaturationDoVoltage);
+   }
+   if(EEPROM.read(SaturationDoTemperatureAddress)==0xFF && EEPROM.read(SaturationDoTemperatureAddress+1)==0xFF && EEPROM.read(SaturationDoTemperatureAddress+2)==0xFF && EEPROM.read(SaturationDoTemperatureAddress+3)==0xFF)
+   {
+      SaturationDoTemperature = 25.0;   //default temperature is 25^C
+      EEPROM_write(SaturationDoTemperatureAddress, SaturationDoTemperature);
    }
 }
