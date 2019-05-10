@@ -7,9 +7,9 @@ This sketch connects the arduino to a raspberry pi
 and publishes the readings for temperature and turbidity
 every 1 second. This is done using MQTT.
 If the arduino can't connect to the pi, it writes the
-temperature and turbidity to a text file on the SD card
-(if one is connected to the wifi shield) every 5-ish seconds
-until it can reconnect. It's not exactly 5 because the
+temperature, turbidity, and dissolved oxygen level to a text file
+on the SD card (if one is connected to the wifi shield) every 5-ish
+seconds until it can reconnect. It's not exactly 5 because the
 process of trying to reconnect uses some time.
 
 You will need:
@@ -262,6 +262,7 @@ void writeDataToSD() {
       updateDoValue();
       String(doValue).toCharArray(temp, 6);
       strcat(payload, temp);
+      strcat(payload, "\n");
 
       dataFile.print(payload);
 
@@ -439,6 +440,10 @@ byte uartParse()
 }
 
 void calibrateDO() {
+   client.publish("calibrationMessage", "Please expose the sensor to the air.");
+   client.publish("calibrationMessage", "Make sure the temperture sensor is measureing the temperature of the calibration environment. ");
+   client.publish("calibrationMessage", "Waiting 1 minute to make sure that the sensor has time to adjust.");
+   delay(60000); //Wait 1 minute
    EEPROM_write(SaturationDoVoltageAddress, averageVoltage);
    EEPROM_write(SaturationDoTemperatureAddress, temperature);
    SaturationDoVoltage = averageVoltage;
